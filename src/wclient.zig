@@ -1,17 +1,69 @@
 const std = @import("std");
-const win32 = @import("win32").everything;
-const WINAPI = std.os.windows.WINAPI;
-const mkutf16 = std.unicode.utf8ToUtf16LeStringLiteral;
 const strings = @import("strings");
 const log = @import("log");
-const rdpc_session = @import("rdpc_session.zig");
+const hexdump = @import("hexdump");
+
+const WINAPI = std.os.windows.WINAPI;
+const mkutf16 = std.unicode.utf8ToUtf16LeStringLiteral;
+pub const win32 = struct
+{
+    usingnamespace @import("win32").zig;
+    usingnamespace @import("win32").foundation;
+    usingnamespace @import("win32").storage.file_system;
+    usingnamespace @import("win32").globalization;
+    usingnamespace @import("win32").ui.windows_and_messaging;
+    usingnamespace @import("win32").ui.controls;
+    usingnamespace @import("win32").graphics.gdi;
+    usingnamespace @import("win32").system.windows_programming;
+};
 
 const c = rdpc_session.c;
 
+const rdpc_session = @import("rdpc_session.zig");
+
 var g_allocator: std.mem.Allocator = std.heap.c_allocator;
+
+const MyError = error
+{
+    ShowCommandLine,
+};
 
 var g_hwnd: ?win32.HWND = null;
 const g_class_name = mkutf16("wclient window class");
+
+//*****************************************************************************
+fn show_command_line_args() !void
+{
+}
+
+//*****************************************************************************
+fn process_args(pCmdLine: [*:0]u16, settings: *c.rdpc_settings_t,
+        rdp_connect: *rdpc_session.rdp_connect_t) !void
+{
+    _ = pCmdLine;
+    _ = settings;
+    _ = rdp_connect;
+}
+
+//*****************************************************************************
+fn create_rdpc_session(pCmdLine: [*:0]u16,
+        rdp_connect: *rdpc_session.rdp_connect_t) !*rdpc_session.rdp_session_t
+{
+    const settings = try g_allocator.create(c.struct_rdpc_settings_t);
+    defer g_allocator.destroy(settings);
+    settings.* = .{};
+    const result = process_args(pCmdLine, settings, rdp_connect);
+    if (result) |_| { } else |err|
+    {
+        if (err == MyError.ShowCommandLine)
+        {
+            try show_command_line_args();
+        }
+        return err;
+    }
+    return try rdpc_session.rdp_session_t.create(&g_allocator,
+            settings, rdp_connect);
+}
 
 //*****************************************************************************
 // we need both WinMain and wWinMain
@@ -62,7 +114,6 @@ fn MyWinMain(hInstance: win32.HINSTANCE, hPrevInstance: ?win32.HINSTANCE,
         pCmdLine: [*:0]u16, nCmdShow: u32) !i32
 {
     _ = hPrevInstance;
-    _ = pCmdLine;
 
     // get temp path
     const file_name = try g_allocator.alloc(u8, 256);
@@ -87,6 +138,7 @@ fn MyWinMain(hInstance: win32.HINSTANCE, hPrevInstance: ?win32.HINSTANCE,
         }
     }
 
+    // init logging
     try log.initWithFile(&g_allocator, log.LogLevel.debug,
             std.mem.sliceTo(file_name, 0));
     defer log.deinit();
@@ -94,8 +146,31 @@ fn MyWinMain(hInstance: win32.HINSTANCE, hPrevInstance: ?win32.HINSTANCE,
             "starting up, pid {}",
             .{std.os.windows.GetCurrentProcessId()});
 
+    var it = std.mem.tokenizeSequence(u16, std.mem.sliceTo(pCmdLine, 0), mkutf16(" "));
+    while (it.next()) |param|
+    {
+        if (!std.mem.eql(u16, param, mkutf16("")))
+        {
+            try log.logln(log.LogLevel.info, @src(), "param {any}", .{param});
+        }
+    }
+
     try rdpc_session.init();
     defer rdpc_session.deinit();
+
+    const rdp_connect = try g_allocator.create(rdpc_session.rdp_connect_t);
+    defer g_allocator.destroy(rdp_connect);
+    rdp_connect.* = .{};
+
+    const session = create_rdpc_session(pCmdLine, rdp_connect) catch |err|
+            if (err == MyError.ShowCommandLine) return 0 else return err;
+    defer session.delete();
+    try session.connect();
+    try session.loop();
+
+
+
+
 
     var wc = std.mem.zeroes(win32.WNDCLASSW);
     wc.hInstance = hInstance;
@@ -135,7 +210,6 @@ fn MyWinMain(hInstance: win32.HINSTANCE, hPrevInstance: ?win32.HINSTANCE,
 
     //const alloc_buf = std.fmt.allocPrintZ(g_allocator, "nCmdShow {}", .{nCmdShow}) catch return 0;
     //_ = win32.MessageBoxA(null, alloc_buf, "Hello Zig!", win32.MB_OKCANCEL);
-
     //_ = win32.MessageBoxW(null, pCmdLine, mkutf16("Hello Zig!"), win32.MB_OKCANCEL);
 
     // do not need to check result
@@ -154,7 +228,7 @@ fn MyWinMain(hInstance: win32.HINSTANCE, hPrevInstance: ?win32.HINSTANCE,
             break;
         }
         var msg = std.mem.zeroes(win32.MSG);
-        while (win32.PeekMessageW(&msg, null, 0, 0, win32.PM_REMOVE) != 0)
+        while (win32.PeekMessageW(&msg, null, 0, 0, win32.PM_REMOVE) != win32.FALSE)
         {
             if (msg.message == win32.WM_QUIT)
             {
@@ -195,7 +269,7 @@ fn swc_from_u32(nCmdShow: u32) win32.SHOW_WINDOW_CMD
 }
 
 //*****************************************************************************
-fn xclient_show_window(hwnd: win32.HWND, wParam: win32.WPARAM, lParam: win32.LPARAM) bool
+fn wclient_show_window(hwnd: win32.HWND, wParam: win32.WPARAM, lParam: win32.LPARAM) bool
 {
     _ = hwnd;
     _ = wParam;
@@ -204,7 +278,7 @@ fn xclient_show_window(hwnd: win32.HWND, wParam: win32.WPARAM, lParam: win32.LPA
 }
 
 //*****************************************************************************
-fn xclient_close(hwnd: win32.HWND, wParam: win32.WPARAM,
+fn wclient_close(hwnd: win32.HWND, wParam: win32.WPARAM,
         lParam: win32.LPARAM) bool
 {
     _ = wParam;
@@ -228,8 +302,8 @@ fn WindowProc(hwnd: win32.HWND, uMsg: u32, wParam: win32.WPARAM,
     }
     const do_def = switch (uMsg)
     {
-        win32.WM_SHOWWINDOW => xclient_show_window(hwnd, wParam, lParam),
-        win32.WM_CLOSE => xclient_close(hwnd, wParam, lParam),
+        win32.WM_SHOWWINDOW => wclient_show_window(hwnd, wParam, lParam),
+        win32.WM_CLOSE => wclient_close(hwnd, wParam, lParam),
         else => true,
     };
     if (do_def)
