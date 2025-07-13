@@ -15,6 +15,8 @@ pub const win32 = struct
     usingnamespace @import("win32").ui.controls;
     usingnamespace @import("win32").graphics.gdi;
     usingnamespace @import("win32").system.windows_programming;
+    usingnamespace @import("win32").networking.win_sock;
+    usingnamespace @import("win32").system.threading;
 };
 
 const c = rdpc_session.c;
@@ -37,17 +39,196 @@ fn show_command_line_args() !void
 }
 
 //*****************************************************************************
+fn process_server_port(rdp_connect: *rdpc_session.rdp_connect_t,
+        slice_arg: []const u16) !void
+{
+    var al_u32 = std.ArrayList(u32).init(g_allocator);
+    defer al_u32.deinit();
+
+    if (slice_arg.len < 1)
+    {
+        return;
+    }
+
+    // look for \\.\pipe\pipename
+    const dst: []u8 = if (slice_arg[0] == '\\')
+            &rdp_connect.server_port else &rdp_connect.server_name;
+    try strings.utf16_to_utf8Z(&al_u32, dst, slice_arg);
+
+    const sep1 = std.mem.lastIndexOfLinear(u16, slice_arg, mkutf16(":"));
+    const sep2 = std.mem.lastIndexOfLinear(u16, slice_arg, mkutf16("]"));
+    const sep3 = std.mem.lastIndexOfLinear(u16, slice_arg, mkutf16("["));
+    while (true) : (break)
+    {
+        if (sep1) |asep1| // look for [aaaa:bbbb:cccc:dddd]:3389
+        {
+            if (sep2) |asep2|
+            {
+                if (sep3) |asep3|
+                {
+                    if (asep1 > asep2)
+                    {
+                        const s = slice_arg[asep3 + 1..asep2];
+                        const p = slice_arg[asep1 + 1..];
+                        try strings.utf16_to_utf8Z(&al_u32, &rdp_connect.server_name, s);
+                        try strings.utf16_to_utf8Z(&al_u32, &rdp_connect.server_port, p);
+                        break;
+                    }
+                }
+            }
+        }
+        if (sep2) |asep2| // look for [aaaa:bbbb:cccc:dddd]
+        {
+            if (sep3) |asep3|
+            {
+                const s = slice_arg[asep3 + 1..asep2];
+                try strings.utf16_to_utf8Z(&al_u32, &rdp_connect.server_name, s);
+                break;
+            }
+        }
+        if (sep1) |asep1| // look for 127.0.0.1:3389
+        {
+            const s = slice_arg[0..asep1];
+            const p = slice_arg[asep1 + 1..];
+            try strings.utf16_to_utf8Z(&al_u32, &rdp_connect.server_name, s);
+            try strings.utf16_to_utf8Z(&al_u32, &rdp_connect.server_port, p);
+            break;
+        }
+    }
+}
+
+//*****************************************************************************
 fn process_args(pCmdLine: [*:0]u16, settings: *c.rdpc_settings_t,
         rdp_connect: *rdpc_session.rdp_connect_t) !void
 {
-    _ = pCmdLine;
-    _ = settings;
-    _ = rdp_connect;
+    var al_u32 = std.ArrayList(u32).init(g_allocator);
+    defer al_u32.deinit();
+    var al = std.ArrayList([]const u16).init(g_allocator);
+    defer al.deinit();
+    var it = std.mem.tokenizeSequence(u16, std.mem.sliceTo(pCmdLine, 0),
+            mkutf16(" \t"));
+    while (it.next()) |param|
+    {
+        if (!std.mem.eql(u16, param, mkutf16("")))
+        {
+            try al.append(param);
+        }
+    }
+    var index: usize = 0;
+    const count = al.items.len;
+    while (index < count) : (index += 1)
+    {
+        var slice_arg = al.items[index];
+        try log.logln(log.LogLevel.info, @src(), "{} {} {any}",
+                .{index, count, slice_arg});
+        if (std.mem.eql(u16, slice_arg, mkutf16("-h")))
+        {
+            return MyError.ShowCommandLine;
+        }
+        else if (std.mem.eql(u16, slice_arg, mkutf16("-u")))
+        {
+            if (index + 1 >= count)
+            {
+                return MyError.ShowCommandLine;
+            }
+            index += 1;
+            slice_arg = al.items[index];
+            try log.logln(log.LogLevel.info, @src(), "{} {} {any}",
+                    .{index, count, slice_arg});
+            try strings.utf16_to_utf8Z(&al_u32, &settings.username, slice_arg);
+        }
+        else if (std.mem.eql(u16, slice_arg, mkutf16("-d")))
+        {
+            if (index + 1 >= count)
+            {
+                return MyError.ShowCommandLine;
+            }
+            index += 1;
+            slice_arg = al.items[index];
+            try strings.utf16_to_utf8Z(&al_u32, &settings.domain, slice_arg);
+        }
+        else if (std.mem.eql(u16, slice_arg, mkutf16("-s")))
+        {
+            if (index + 1 >= count)
+            {
+                return MyError.ShowCommandLine;
+            }
+            index += 1;
+            slice_arg = al.items[index];
+            try strings.utf16_to_utf8Z(&al_u32, &settings.altshell, slice_arg);
+        }
+        else if (std.mem.eql(u16, slice_arg, mkutf16("-c")))
+        {
+            if (index + 1 >= count)
+            {
+                return MyError.ShowCommandLine;
+            }
+            index += 1;
+            slice_arg = al.items[index];
+            try strings.utf16_to_utf8Z(&al_u32, &settings.workingdir, slice_arg);
+        }
+        else if (std.mem.eql(u16, slice_arg, mkutf16("-p")))
+        {
+            if (index + 1 >= count)
+            {
+                return MyError.ShowCommandLine;
+            }
+            index += 1;
+            slice_arg = al.items[index];
+            try strings.utf16_to_utf8Z(&al_u32, &settings.password, slice_arg);
+        }
+        else if (std.mem.eql(u16, slice_arg, mkutf16("-n")))
+        {
+            if (index + 1 >= count)
+            {
+                return MyError.ShowCommandLine;
+            }
+            index += 1;
+            slice_arg = al.items[index];
+            try strings.utf16_to_utf8Z(&al_u32, &settings.clientname, slice_arg);
+        }
+        else if (std.mem.eql(u16, slice_arg, mkutf16("-g")))
+        {
+            if (index + 1 >= count)
+            {
+                return MyError.ShowCommandLine;
+            }
+            index += 1;
+            slice_arg = al.items[index];
+            var seq = std.mem.tokenizeSequence(u16, slice_arg, mkutf16("x"));
+            if (seq.next()) |chunk0|
+            {
+                settings.width =
+                    try std.fmt.parseIntWithGenericCharacter(c_int, u16,
+                    chunk0, 10);
+                if (seq.next()) |chunk1|
+                {
+                    settings.height =
+                        try std.fmt.parseIntWithGenericCharacter(c_int, u16,
+                        chunk1, 10);
+                }
+                else
+                {
+                    return MyError.ShowCommandLine;
+                }
+            }
+            else
+            {
+                return MyError.ShowCommandLine;
+            }
+        }
+        else
+        {
+            try process_server_port(rdp_connect, slice_arg);
+        }
+    }
 }
 
 //*****************************************************************************
 fn create_rdpc_session(pCmdLine: [*:0]u16,
-        rdp_connect: *rdpc_session.rdp_connect_t) !*rdpc_session.rdp_session_t
+        rdp_connect: *rdpc_session.rdp_connect_t,
+        hInstance: win32.HINSTANCE,
+        nCmdShow: u32) !*rdpc_session.rdp_session_t
 {
     const settings = try g_allocator.create(c.struct_rdpc_settings_t);
     defer g_allocator.destroy(settings);
@@ -62,7 +243,7 @@ fn create_rdpc_session(pCmdLine: [*:0]u16,
         return err;
     }
     return try rdpc_session.rdp_session_t.create(&g_allocator,
-            settings, rdp_connect);
+            settings, rdp_connect, hInstance, nCmdShow);
 }
 
 //*****************************************************************************
@@ -146,15 +327,6 @@ fn MyWinMain(hInstance: win32.HINSTANCE, hPrevInstance: ?win32.HINSTANCE,
             "starting up, pid {}",
             .{std.os.windows.GetCurrentProcessId()});
 
-    var it = std.mem.tokenizeSequence(u16, std.mem.sliceTo(pCmdLine, 0), mkutf16(" "));
-    while (it.next()) |param|
-    {
-        if (!std.mem.eql(u16, param, mkutf16("")))
-        {
-            try log.logln(log.LogLevel.info, @src(), "param {any}", .{param});
-        }
-    }
-
     try rdpc_session.init();
     defer rdpc_session.deinit();
 
@@ -162,153 +334,11 @@ fn MyWinMain(hInstance: win32.HINSTANCE, hPrevInstance: ?win32.HINSTANCE,
     defer g_allocator.destroy(rdp_connect);
     rdp_connect.* = .{};
 
-    const session = create_rdpc_session(pCmdLine, rdp_connect) catch |err|
-            if (err == MyError.ShowCommandLine) return 0 else return err;
+    const session = create_rdpc_session(pCmdLine, rdp_connect, hInstance,
+            nCmdShow) catch |err| if (err == MyError.ShowCommandLine)
+            return 0 else return err;
     defer session.delete();
     try session.connect();
     try session.loop();
-
-
-
-
-
-    var wc = std.mem.zeroes(win32.WNDCLASSW);
-    wc.hInstance = hInstance;
-    wc.lpfnWndProc = WindowProc;
-    wc.lpszClassName = g_class_name;
-    wc.hCursor = win32.LoadCursorW(null, win32.IDC_ARROW);
-    wc.hbrBackground = win32.GetSysColorBrush(@intFromEnum(win32.COLOR_BTNFACE));
-    const atom = win32.RegisterClassW(&wc);
-    if (atom == 0)
-    {
-        return 0;
-    }
-    errdefer _ = win32.UnregisterClassW(g_class_name, hInstance);
-
-    var icex = std.mem.zeroes(win32.INITCOMMONCONTROLSEX);
-    icex.dwSize = @sizeOf(win32.INITCOMMONCONTROLSEX);
-    icex.dwICC = win32.ICC_WIN95_CLASSES;
-    if (win32.InitCommonControlsEx(&icex) == win32.FALSE)
-    {
-        return 0;
-    }
-
-    const hwnd = win32.CreateWindowExW(win32.WS_EX_APPWINDOW,
-            g_class_name, mkutf16("wclient"),
-            win32.WS_OVERLAPPEDWINDOW,
-            win32.CW_USEDEFAULT, win32.CW_USEDEFAULT,
-            win32.CW_USEDEFAULT, win32.CW_USEDEFAULT,
-            null, null, hInstance, null);
-    if (hwnd) |ahwnd|
-    {
-        g_hwnd = ahwnd;
-    }
-    else
-    {
-        return 0;
-    }
-
-    //const alloc_buf = std.fmt.allocPrintZ(g_allocator, "nCmdShow {}", .{nCmdShow}) catch return 0;
-    //_ = win32.MessageBoxA(null, alloc_buf, "Hello Zig!", win32.MB_OKCANCEL);
-    //_ = win32.MessageBoxW(null, pCmdLine, mkutf16("Hello Zig!"), win32.MB_OKCANCEL);
-
-    // do not need to check result
-    _ = win32.ShowWindow(g_hwnd, swc_from_u32(nCmdShow));
-
-    var cont = true;
-    while (cont)
-    {
-        const handle_count: usize = 0;
-        var handles = std.mem.zeroes([16]?win32.HANDLE);
-        if (win32.MsgWaitForMultipleObjects(handle_count, &handles,
-                win32.FALSE, win32.INFINITE,
-                win32.QS_ALLINPUT) == @intFromEnum(win32.WAIT_FAILED))
-        {
-            cont = false;
-            break;
-        }
-        var msg = std.mem.zeroes(win32.MSG);
-        while (win32.PeekMessageW(&msg, null, 0, 0, win32.PM_REMOVE) != win32.FALSE)
-        {
-            if (msg.message == win32.WM_QUIT)
-            {
-                cont = false;
-                break;
-            }
-            if (win32.IsDialogMessageW(g_hwnd, &msg) == 0)
-            {
-                _ = win32.TranslateMessage(&msg);
-                _ = win32.DispatchMessageW(&msg);
-            }
-        }
-    }
-    
-    return 0;
-}
-
-//*****************************************************************************
-fn swc_from_u32(nCmdShow: u32) win32.SHOW_WINDOW_CMD
-{
-    const swc = switch (nCmdShow)
-    {
-        0 => win32.SW_HIDE,
-        1 => win32.SW_SHOWNORMAL,
-        2 => win32.SW_SHOWMINIMIZED,
-        3 => win32.SW_SHOWMAXIMIZED,
-        4 => win32.SW_SHOWNOACTIVATE,
-        5 => win32.SW_SHOW,
-        6 => win32.SW_MINIMIZE,
-        7 => win32.SW_SHOWMINNOACTIVE,
-        8 => win32.SW_SHOWNA,
-        9 => win32.SW_RESTORE,
-        10 => win32.SW_SHOWDEFAULT,
-        11 => win32.SW_FORCEMINIMIZE,
-        else => win32.SW_SHOWDEFAULT,
-    };
-    return swc;
-}
-
-//*****************************************************************************
-fn wclient_show_window(hwnd: win32.HWND, wParam: win32.WPARAM, lParam: win32.LPARAM) bool
-{
-    _ = hwnd;
-    _ = wParam;
-    _ = lParam;
-    return true;
-}
-
-//*****************************************************************************
-fn wclient_close(hwnd: win32.HWND, wParam: win32.WPARAM,
-        lParam: win32.LPARAM) bool
-{
-    _ = wParam;
-    _ = lParam;
-    if (win32.MessageBoxW(hwnd, mkutf16("Do You want to Exit?"),
-            mkutf16("Finder"), win32.MB_YESNO) == win32.IDYES)
-    {
-        return true;
-    }
-    return false;
-}
-
-//*****************************************************************************
-fn WindowProc(hwnd: win32.HWND, uMsg: u32, wParam: win32.WPARAM,
-        lParam: win32.LPARAM) callconv(WINAPI) win32.LRESULT
-{
-    if (uMsg == win32.WM_DESTROY)
-    {
-        win32.PostQuitMessage(0);
-        return 0;
-    }
-    const do_def = switch (uMsg)
-    {
-        win32.WM_SHOWWINDOW => wclient_show_window(hwnd, wParam, lParam),
-        win32.WM_CLOSE => wclient_close(hwnd, wParam, lParam),
-        else => true,
-    };
-    if (do_def)
-    {
-        return win32.DefWindowProcW(hwnd, uMsg, wParam, lParam);
-    }
     return 0;
 }
