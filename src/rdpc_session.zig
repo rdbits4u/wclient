@@ -603,12 +603,10 @@ pub const rdp_session_t = struct
             const event1 = win32.WSACreateEvent();
             try err_if(event1 == null, SesError.Connect);
             defer _ = win32.WSACloseEvent(event1);
-            var flags: i32 = win32.FD_READ | win32.FD_CLOSE;
             const want_write = (!self.connected) or (self.send_head != null);
-            if (want_write)
-            {
-                flags |= win32.FD_WRITE;
-            }
+            const flgas_read = win32.FD_READ | win32.FD_CLOSE;
+            const flags_write = flgas_read | win32.FD_WRITE;
+            const flags: i32 = if (want_write) flags_write else flgas_read;
             _ = win32.WSAEventSelect(self.sck, event1, flags);
             // setup for MsgWaitForMultipleObjects
             var handle_count: usize = 0;
@@ -623,31 +621,38 @@ pub const rdp_session_t = struct
                 cont = false;
                 break;
             }
-            const wait_obj_0: u32 = @intFromEnum(win32.WAIT_OBJECT_0);
-            if (win32.WaitForSingleObject(event1, 0) == wait_obj_0)
+            // check socket
+            var pollfd = std.mem.zeroes(win32.WSAPOLLFD);
+            pollfd.fd = self.sck;
+            const events_read = win32.POLLIN;
+            const events_write = win32.POLLIN | win32.POLLOUT;
+            pollfd.events = if (want_write) events_write else events_read;
+            if (win32.WSAPoll(&pollfd, 1, 0) > 0)
             {
-                var pollfd = std.mem.zeroes(win32.WSAPOLLFD);
-                pollfd.fd = self.sck;
-                pollfd.events = win32.POLLIN;
-                if (want_write)
+                if (pollfd.revents & win32.POLLIN != 0)
                 {
-                    pollfd.events |= win32.POLLOUT;
+                    try self.read_process_server_data();
                 }
-                if (win32.WSAPoll(&pollfd, 1, 0) > 0)
+                if (pollfd.revents & win32.POLLOUT != 0)
                 {
-                    if (pollfd.revents & win32.POLLIN != 0)
-                    {
-                        try self.read_process_server_data();
-                    }
-                    if (pollfd.revents & win32.POLLOUT != 0)
-                    {
-                        try self.process_write_server_data();
-                    }
+                    try self.process_write_server_data();
                 }
             }
-            if (self.rdp_win32) |ardp_win32|
+            // check windows messages
+            var msg = std.mem.zeroes(win32.MSG);
+            while (win32.PeekMessageW(&msg, null, 0, 0, win32.PM_REMOVE) !=
+                    win32.FALSE)
             {
-                cont = try ardp_win32.check_fds();
+                if (msg.message == win32.WM_QUIT)
+                {
+                    cont = false;
+                    break;
+                }
+                if (win32.IsDialogMessageW(msg.hwnd, &msg) == win32.FALSE)
+                {
+                    _ = win32.TranslateMessage(&msg);
+                    _ = win32.DispatchMessageW(&msg);
+                }
             }
         }
     }

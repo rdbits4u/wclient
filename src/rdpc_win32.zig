@@ -74,27 +74,6 @@ pub const rdp_win32_t = struct
     }
 
     //*************************************************************************
-    pub fn check_fds(self: *rdp_win32_t) !bool
-    {
-        try self.session.logln_devel(log.LogLevel.debug, @src(), "", .{});
-
-        var msg = std.mem.zeroes(win32.MSG);
-        while (win32.PeekMessageW(&msg, null, 0, 0, win32.PM_REMOVE) != win32.FALSE)
-        {
-            if (msg.message == win32.WM_QUIT)
-            {
-                return false;
-            }
-            if (win32.IsDialogMessageW(self.hwnd, &msg) == win32.FALSE)
-            {
-                _ = win32.TranslateMessage(&msg);
-                _ = win32.DispatchMessageW(&msg);
-            }
-        }
-        return true;
-    }
-
-    //*************************************************************************
     fn create_window(self: *rdp_win32_t) !void
     {
         try self.session.logln(log.LogLevel.debug, @src(), "", .{});
