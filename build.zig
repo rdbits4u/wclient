@@ -19,10 +19,6 @@ pub fn build(b: *std.Build) void
         .strip = do_strip,
     });
     wclient.linkLibC();
-	//wclient.linkSystemLibrary("c");
-    //wclient.linkSystemLibrary("gdi32");
-    //wclient.linkSystemLibrary("user32");
-    //wclient.linkSystemLibrary("kernel32");
 
     wclient.addIncludePath(b.path("../common"));
     wclient.addIncludePath(b.path("../rdpc/include"));
@@ -35,12 +31,7 @@ pub fn build(b: *std.Build) void
     wclient.addObjectFile(b.path("../cliprdr/zig-out/lib/cliprdr.lib"));
     wclient.addObjectFile(b.path("../rdpsnd/zig-out/lib/rdpsnd.lib"));
 
-    //wclient.addLibraryPath(.{.cwd_relative = "../rdpc/zig-out/bin"});
-    //wclient.addLibraryPath(.{.cwd_relative = "../svc/zig-out/bin"});
-    //wclient.addLibraryPath(.{.cwd_relative = "../cliprdr/zig-out/bin"});
-    //wclient.addLibraryPath(.{.cwd_relative = "../rdpsnd/zig-out/bin"});
-
-	wclient.root_module.addImport("hexdump", b.createModule(.{
+    wclient.root_module.addImport("hexdump", b.createModule(.{
         .root_source_file = b.path("../common/hexdump.zig"),
     }));
     wclient.root_module.addImport("strings", b.createModule(.{
