@@ -97,6 +97,7 @@ pub const rdp_win32_t = struct
     //*************************************************************************
     fn create_window(self: *rdp_win32_t) !void
     {
+        try self.session.logln(log.LogLevel.debug, @src(), "", .{});
         var wc = std.mem.zeroes(win32.WNDCLASSW);
         wc.hInstance = self.hInstance;
         wc.lpfnWndProc = window_proc;

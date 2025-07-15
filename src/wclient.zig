@@ -101,18 +101,48 @@ fn process_server_port(rdp_connect: *rdpc_session.rdp_connect_t,
 fn process_args(pCmdLine: [*:0]u16, settings: *c.rdpc_settings_t,
         rdp_connect: *rdpc_session.rdp_connect_t) !void
 {
+    // default some stuff
+    strings.copyZ(&rdp_connect.server_port, "3389");
+    settings.bpp = 32;
+    settings.width = 1024;
+    settings.height = 768;
+    settings.dpix = 96;
+    settings.dpiy = 96;
+    settings.keyboard_layout = 0x0409;
+    settings.rfx = 1;
+    settings.jpg = 0;
+    settings.use_frame_ack = 1;
+    settings.frames_in_flight = 5;
     var al_u32 = std.ArrayList(u32).init(g_allocator);
     defer al_u32.deinit();
+    // get some info from os
+    var cb_buffer: u32 = 256;
+    const buffer = try g_allocator.alloc(u16, cb_buffer);
+    defer g_allocator.free(buffer);
+    const bufferZ = buffer[0.. :0];
+    if (win32.GetUserNameW(bufferZ.ptr, &cb_buffer) != win32.FALSE)
+    {
+        try strings.utf16_to_utf8Z(&al_u32, &settings.username,
+                std.mem.sliceTo(bufferZ, 0));
+        try log.logln(log.LogLevel.info, @src(), "username {s}",
+                .{std.mem.sliceTo(&settings.username, 0)});
+    }
+    cb_buffer = 256;
+    if (win32.GetComputerNameW(bufferZ.ptr, &cb_buffer) != win32.FALSE)
+    {
+        try strings.utf16_to_utf8Z(&al_u32, &settings.clientname,
+                std.mem.sliceTo(bufferZ, 0));
+        try log.logln(log.LogLevel.info, @src(), "clientname {s}",
+                .{std.mem.sliceTo(&settings.clientname, 0)});
+    }
+    // process command line args
     var al = std.ArrayList([]const u16).init(g_allocator);
     defer al.deinit();
     var it = std.mem.tokenizeSequence(u16, std.mem.sliceTo(pCmdLine, 0),
-            mkutf16(" \t"));
+            mkutf16(" "));
     while (it.next()) |param|
     {
-        if (!std.mem.eql(u16, param, mkutf16("")))
-        {
-            try al.append(param);
-        }
+        try al.append(param);
     }
     var index: usize = 0;
     const count = al.items.len;
@@ -133,8 +163,6 @@ fn process_args(pCmdLine: [*:0]u16, settings: *c.rdpc_settings_t,
             }
             index += 1;
             slice_arg = al.items[index];
-            try log.logln(log.LogLevel.info, @src(), "{} {} {any}",
-                    .{index, count, slice_arg});
             try strings.utf16_to_utf8Z(&al_u32, &settings.username, slice_arg);
         }
         else if (std.mem.eql(u16, slice_arg, mkutf16("-d")))
