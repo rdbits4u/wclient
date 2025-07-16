@@ -103,7 +103,7 @@ pub const rdp_win32_t = struct
                 g_class_name, mkutf16("wclient"),
                 win32.WS_OVERLAPPEDWINDOW,
                 win32.CW_USEDEFAULT, win32.CW_USEDEFAULT,
-                win32.CW_USEDEFAULT, win32.CW_USEDEFAULT,
+                @bitCast(self.width), @bitCast(self.height),
                 null, null, self.hInstance, null);
         if (hwnd) |ahwnd|
         {
@@ -150,6 +150,20 @@ pub const rdp_win32_t = struct
         _ = wParam;
         _ = lParam;
         return true;
+    }
+
+    //*************************************************************************
+    pub fn pointer_update(self: *rdp_win32_t, pointer: *c.pointer_t) !void
+    {
+        try self.session.logln(log.LogLevel.debug, @src(),
+                "xor_bpp {}", .{pointer.xor_bpp});
+    }
+
+    //*************************************************************************
+    pub fn pointer_cached(self: *rdp_win32_t, cache_index: u16) !void
+    {
+        try self.session.logln(log.LogLevel.debug, @src(),
+                "cache_index {}", .{cache_index});
     }
 
 };

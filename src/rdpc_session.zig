@@ -350,10 +350,10 @@ pub const rdp_session_t = struct
     {
         try self.logln(log.LogLevel.info, @src(), "bpp {}",
                 .{pointer.xor_bpp});
-        // if (self.rdp_x11) |ardp_x11|
-        // {
-        //     try ardp_x11.pointer_update(pointer);
-        // }
+        if (self.rdp_win32) |ardp_win32|
+        {
+            try ardp_win32.pointer_update(pointer);
+        }
     }
 
     //*************************************************************************
@@ -361,10 +361,10 @@ pub const rdp_session_t = struct
     {
         try self.logln_devel(log.LogLevel.info, @src(), "cache_index {}",
                 .{cache_index});
-        // if (self.rdp_x11) |ardp_x11|
-        // {
-        //     try ardp_x11.pointer_cached(cache_index);
-        // }
+        if (self.rdp_win32) |ardp_win32|
+        {
+            try ardp_win32.pointer_cached(cache_index);
+        }
     }
 
     //*************************************************************************
