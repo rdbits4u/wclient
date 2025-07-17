@@ -23,6 +23,7 @@ pub const win32 = struct
 const c = rdpc_session.c;
 
 const rdpc_session = @import("rdpc_session.zig");
+const rdpc_win32_clip = @import("rdpc_win32_clip.zig");
 
 pub const Win32Error = error
 {
@@ -41,6 +42,7 @@ pub const rdp_win32_t = struct
 {
     session: *rdpc_session.rdp_session_t,
     allocator: *const std.mem.Allocator,
+    rdp_win32_clip: *rdpc_win32_clip.rdp_win32_clip_t,
     hInstance: win32.HINSTANCE,
     nCmdShow: u32,
 
@@ -57,7 +59,10 @@ pub const rdp_win32_t = struct
     {
         const self = try allocator.create(rdp_win32_t);
         errdefer allocator.destroy(self);
+        const rdp_win32_clip = try rdpc_win32_clip.rdp_win32_clip_t.create(allocator,
+                session, self);
         self.* = .{.session = session, .allocator = allocator,
+                .rdp_win32_clip = rdp_win32_clip,
                 .hInstance = hInstance, .nCmdShow = nCmdShow};
         self.width = width;
         self.height = height;
@@ -76,7 +81,7 @@ pub const rdp_win32_t = struct
     //*************************************************************************
     fn create_window(self: *rdp_win32_t) !void
     {
-        try self.session.logln(log.LogLevel.debug, @src(), "", .{});
+        try self.session.logln(log.LogLevel.info, @src(), "", .{});
         var wc = std.mem.zeroes(win32.WNDCLASSW);
         wc.hInstance = self.hInstance;
         wc.lpfnWndProc = window_proc;
@@ -127,8 +132,8 @@ pub const rdp_win32_t = struct
     }
 
     //*************************************************************************
-    fn wm_close(self: *rdp_win32_t, hwnd: win32.HWND, wParam: win32.WPARAM,
-            lParam: win32.LPARAM) bool
+    fn wm_close(self: *rdp_win32_t, hwnd: win32.HWND,
+            wParam: win32.WPARAM, lParam: win32.LPARAM) !bool
     {
         _ = self;
         _ = wParam;
@@ -143,7 +148,7 @@ pub const rdp_win32_t = struct
 
     //*************************************************************************
     fn wm_showwindow(self: *rdp_win32_t, hwnd: win32.HWND,
-            wParam: win32.WPARAM, lParam: win32.LPARAM) bool
+            wParam: win32.WPARAM, lParam: win32.LPARAM) !bool
     {
         _ = self;
         _ = hwnd;
@@ -153,16 +158,30 @@ pub const rdp_win32_t = struct
     }
 
     //*************************************************************************
+    fn wm_mousemove(self: *rdp_win32_t, hwnd: win32.HWND,
+            wParam: win32.WPARAM, lParam: win32.LPARAM) !bool
+    {
+        _ = hwnd;
+        _ = wParam;
+        const x = win32.loword(lParam);
+        const y = win32.hiword(lParam);
+        try self.session.logln_devel(log.LogLevel.info, @src(),
+                "x {} y {}", .{x, y});                
+        _ = c.rdpc_send_mouse_event(self.session.rdpc, c.PTRFLAGS_MOVE, x, y);
+        return true;
+    }
+
+    //*************************************************************************
     pub fn pointer_update(self: *rdp_win32_t, pointer: *c.pointer_t) !void
     {
-        try self.session.logln(log.LogLevel.debug, @src(),
+        try self.session.logln(log.LogLevel.info, @src(),
                 "xor_bpp {}", .{pointer.xor_bpp});
     }
 
     //*************************************************************************
     pub fn pointer_cached(self: *rdp_win32_t, cache_index: u16) !void
     {
-        try self.session.logln(log.LogLevel.debug, @src(),
+        try self.session.logln(log.LogLevel.info, @src(),
                 "cache_index {}", .{cache_index});
     }
 
@@ -185,12 +204,14 @@ fn window_proc(hwnd: win32.HWND, uMsg: u32, wParam: win32.WPARAM,
     var do_def = true;
     if (self) |aself|
     {
-        do_def = switch (uMsg)
+        const do_def_err = switch (uMsg)
         {
             win32.WM_CLOSE => aself.wm_close(hwnd, wParam, lParam),
             win32.WM_SHOWWINDOW => aself.wm_showwindow(hwnd, wParam, lParam),
+            win32.WM_MOUSEMOVE => aself.wm_mousemove(hwnd, wParam, lParam),
             else => true,
         };
+        do_def = do_def_err catch true;
     }
     if (do_def)
     {

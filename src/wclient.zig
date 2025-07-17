@@ -314,16 +314,14 @@ pub export fn wWinMain(hInstance: win32.HINSTANCE,
         hPrevInstance: ?win32.HINSTANCE,
         pCmdLine: [*:0]u16, nCmdShow: u32) callconv(WINAPI) i32
 {
-    return MyWinMain(hInstance, hPrevInstance, pCmdLine, nCmdShow)
-            catch return 0;
+    _ = hPrevInstance;
+    return main_with_error(hInstance, pCmdLine, nCmdShow) catch return 0;
 }
 
 //*****************************************************************************
-fn MyWinMain(hInstance: win32.HINSTANCE, hPrevInstance: ?win32.HINSTANCE,
+fn main_with_error(hInstance: win32.HINSTANCE,
         pCmdLine: [*:0]u16, nCmdShow: u32) !i32
 {
-    _ = hPrevInstance;
-
     // get temp path
     const file_name = try g_allocator.alloc(u8, 256);
     defer g_allocator.free(file_name);
@@ -346,22 +344,37 @@ fn MyWinMain(hInstance: win32.HINSTANCE, hPrevInstance: ?win32.HINSTANCE,
                     .{std.mem.sliceTo(utf8, 0)});
         }
     }
-
     // init logging
     try log.initWithFile(&g_allocator, log.LogLevel.debug,
             std.mem.sliceTo(file_name, 0));
     defer log.deinit();
+    const rv = main_with_log(hInstance, pCmdLine, nCmdShow);
+    if (rv) |arv|
+    {
+        try log.logln(log.LogLevel.info, @src(),
+                "main_with_log error rv {}", .{arv});
+        return arv;
+    }
+    else |err|
+    {
+        try log.logln(log.LogLevel.info, @src(),
+                "main_with_log error {}", .{err});
+    }
+    return 0;
+}
+
+//*****************************************************************************
+fn main_with_log(hInstance: win32.HINSTANCE,
+        pCmdLine: [*:0]u16, nCmdShow: u32) !i32
+{
     try log.logln(log.LogLevel.info, @src(),
             "starting up, pid {}",
             .{std.os.windows.GetCurrentProcessId()});
-
     try rdpc_session.init();
     defer rdpc_session.deinit();
-
     const rdp_connect = try g_allocator.create(rdpc_session.rdp_connect_t);
     defer g_allocator.destroy(rdp_connect);
     rdp_connect.* = .{};
-
     const session = create_rdpc_session(pCmdLine, rdp_connect, hInstance,
             nCmdShow) catch |err| if (err == MyError.ShowCommandLine)
             return 0 else return err;
